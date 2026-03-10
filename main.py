@@ -144,7 +144,10 @@ class AudioToText(ctk.CTk):
             self.text_area.delete("1.0", "end")
             self.full_text = ""
             self.text_area.configure(state="disabled")
+            
             self.progress_bar.set(0)
+            self.progress_label.configure(text="0%")    
+            self.progress_bar.configure(progress_color="gray")
             
             # Use threading to prevent GUI freezing during heavy ML tasks
             threading.Thread(target=self.run_process, args=(file_path,), daemon=True).start()
@@ -170,7 +173,8 @@ class AudioToText(ctk.CTk):
             )
 
             self.update_status("Распознавание...", "#3b8ed0")
-            
+            self.progress_bar.configure(progress_color="#3b8ed0")
+
             # Set beam_size=1 for maximum speed, vad_filter=True to ignore silence
             segments, info = model.transcribe(path, beam_size=1, language="ru", initial_prompt=user_prompt, vad_filter=True)
             total_duration = info.duration
@@ -196,6 +200,9 @@ class AudioToText(ctk.CTk):
 
             if not self.stop_flag:
                 self.update_status("Готово!", "#00ff15")
+                self.progress_bar.set(1.0)
+                self.progress_label.configure(text="100%")
+                self.progress_bar.configure(progress_color="#01b010")
                 winsound.MessageBeep(winsound.MB_ICONASTERISK)
             
             # Enable export even if transcription was partially completed
