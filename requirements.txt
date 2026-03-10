@@ -1,0 +1,4 @@
+customtkinter
+faster-whisper
+python-docx
+fpdf2
