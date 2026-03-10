@@ -9,6 +9,7 @@ import winsound
 import sys 
 
 class ToolTip:
+    """Hover tooltip for UI elements."""
     def __init__(self, widget, text):
         self.widget = widget
         self.text = text
@@ -17,11 +18,12 @@ class ToolTip:
     def show_tip(self, event=None):
         if self.tip_window or not self.text:
             return
+        # Position tooltip relative to the widget
         x = self.widget.winfo_rootx() + 20
         y = self.widget.winfo_rooty() + 25
         
         self.tip_window = tw = ctk.CTkToplevel(self.widget)
-        tw.wm_overrideredirect(True)
+        tw.wm_overrideredirect(True)  # Remove window decorations
         tw.wm_geometry(f"+{x}+{y}")
         
         label = ctk.CTkLabel(tw, text=self.text, justify="left",
@@ -43,7 +45,7 @@ class AudioToText(ctk.CTk):
         self.resizable(False, False)
 
         self.full_text = ""
-        self.stop_flag = False  # Флаг для остановки
+        self.stop_flag = False  
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(5, weight=1) 
@@ -51,7 +53,7 @@ class AudioToText(ctk.CTk):
         self.setup_ui()
 
     def setup_ui(self):
-        # 0. Контекст
+        # Context/Prompt section
         self.ctx_header_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.ctx_header_frame.grid(row=0, column=0, padx=20, pady=(20, 0), sticky="w")
         self.ctx_label = ctk.CTkLabel(self.ctx_header_frame, text="Контекст (имена, термины и тд.):", font=("Arial", 12))
@@ -74,7 +76,7 @@ class AudioToText(ctk.CTk):
         self.context_entry.bind("<KeyRelease>", self.check_context)
         self.context_entry.bind("<Return>", self.handle_enter_key)
 
-        # 1. Кнопки управления
+        # Control Buttons
         self.button_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.button_frame.grid(row=2, column=0, pady=(10, 5), padx=20, sticky="w")
 
@@ -87,11 +89,10 @@ class AudioToText(ctk.CTk):
                                          fg_color="#a83232", hover_color="#7d2525", state="disabled")
         self.stop_button.pack(side="left", padx=10)
 
-        # 2. Статус
+        # Status and Progress
         self.status_label = ctk.CTkLabel(self, text="Статус: Ожидание", text_color="gray")
         self.status_label.grid(row=3, column=0, padx=20, pady=(0, 0), sticky="sw")
 
-        # 3. Прогресс
         self.progress_row_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.progress_row_frame.grid(row=4, column=0, padx=20, pady=(0, 5), sticky="ew")
         
@@ -102,11 +103,11 @@ class AudioToText(ctk.CTk):
         self.progress_label = ctk.CTkLabel(self.progress_row_frame, text="0%", font=("Arial", 14, "bold"), width=45)
         self.progress_label.pack(side="right")
 
-        # 4. Текст 
+        # Output Area
         self.text_area = ctk.CTkTextbox(self, font=("Arial", 16), wrap="word", state="disabled")
         self.text_area.grid(row=5, column=0, padx=20, pady=(0, 0), sticky="nsew")
 
-        # 5. Сохранение
+        # Export Buttons
         self.save_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.save_frame.grid(row=6, column=0, pady=(10, 20), padx=10, sticky="w")
         
@@ -131,38 +132,35 @@ class AudioToText(ctk.CTk):
 
     def start_transcription(self):
         if self.select_button.cget("state") == "disabled": return
+        
         file_path = filedialog.askopenfilename(filetypes=[("Медиа файлы", "*.mp3 *.wav *.m4a *.flac *.mp4 *.mkv *.avi")])
         if file_path:
             self.stop_flag = False
             self.select_button.configure(state="disabled")
             self.stop_button.configure(state="normal")
-            self.btn_docx.configure(state="disabled")
-            self.btn_pdf.configure(state="disabled")
-            self.btn_txt.configure(state="disabled")
             
-            
+            # Reset UI before processing
             self.text_area.configure(state="normal")
             self.text_area.delete("1.0", "end")
             self.full_text = ""
             self.text_area.configure(state="disabled")
-            
             self.progress_bar.set(0)
-            self.progress_bar.configure(progress_color="#3b8ed0")
-            self.progress_label.configure(text="0%")
             
+            # Use threading to prevent GUI freezing during heavy ML tasks
             threading.Thread(target=self.run_process, args=(file_path,), daemon=True).start()
 
     def run_process(self, path):
         try:
             user_prompt = self.context_entry.get().strip()
-            status_text = "Загрузка модели(с контекстом)..." if user_prompt else "Загрузка модели..."
-            self.update_status(status_text, "#f6ff00")
+            self.update_status("Загрузка модели...", "#f6ff00")
 
+            # Handle paths for both script and PyInstaller bundle
             base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
             model_path = os.path.join(base_path, "models", "small")
             
             is_local = os.path.exists(model_path)
             
+            # Auto-download model if local folder is missing
             model = WhisperModel(
                 model_path if is_local else "small", 
                 device="cpu", 
@@ -173,14 +171,16 @@ class AudioToText(ctk.CTk):
 
             self.update_status("Распознавание...", "#3b8ed0")
             
+            # Set beam_size=1 for maximum speed, vad_filter=True to ignore silence
             segments, info = model.transcribe(path, beam_size=1, language="ru", initial_prompt=user_prompt, vad_filter=True)
             total_duration = info.duration
 
             for segment in segments:
-                if self.stop_flag:  # ПРОВЕРКА ОСТАНОВКИ
-                    self.update_status("Прервано пользователем", "#ff4000")
+                if self.stop_flag:
+                    self.update_status("Прервано", "#ff4000")
                     break
                 
+                # Real-time UI update
                 chunk = segment.text.strip() + " "
                 self.text_area.configure(state="normal")
                 self.text_area.insert("end", chunk)
@@ -188,6 +188,7 @@ class AudioToText(ctk.CTk):
                 self.full_text += chunk
                 self.text_area.configure(state="disabled")
                 
+                # Update progress bar based on audio timestamps
                 progress = segment.end / total_duration
                 self.progress_bar.set(min(progress, 1.0))
                 self.progress_label.configure(text=f"{int(min(progress, 1.0) * 100)}%")
@@ -195,12 +196,9 @@ class AudioToText(ctk.CTk):
 
             if not self.stop_flag:
                 self.update_status("Готово!", "#00ff15")
-                self.progress_bar.set(1.0)
-                self.progress_bar.configure(progress_color="#01b010")
-                self.progress_label.configure(text="100%")
                 winsound.MessageBeep(winsound.MB_ICONASTERISK)
             
-            # Активируем кнопки сохранения даже если прервали (сохранит то, что успело)
+            # Enable export even if transcription was partially completed
             if len(self.full_text) > 0:
                 self.btn_docx.configure(state="normal")
                 self.btn_pdf.configure(state="normal")
@@ -208,7 +206,7 @@ class AudioToText(ctk.CTk):
 
         except Exception as e:
             self.update_status("Ошибка!", "red")
-            messagebox.showerror("Ошибка", str(e))
+            messagebox.showerror("Processing Error", str(e))
         finally:
             self.select_button.configure(state="normal")
             self.stop_button.configure(state="disabled")
@@ -222,13 +220,14 @@ class AudioToText(ctk.CTk):
             doc = Document()
             doc.add_paragraph(self.full_text)
             doc.save(p)
-            messagebox.showinfo("", "Word сохранен!")
+            messagebox.showinfo("Success", "Word file saved!")
 
     def save_pdf(self):
         p = filedialog.asksaveasfilename(defaultextension=".pdf")
         if p:
             pdf = FPDF()
             pdf.add_page()
+            # Attempt to use system font for Unicode support
             f_path = "C:/Windows/Fonts/arial.ttf"
             if os.path.exists(f_path):
                 pdf.add_font("Arial", "", f_path)
@@ -237,14 +236,14 @@ class AudioToText(ctk.CTk):
                 pdf.set_font("Helvetica", size=14)
             pdf.multi_cell(0, 10, self.full_text)
             pdf.output(p)
-            messagebox.showinfo("", "PDF сохранен!")
+            messagebox.showinfo("Success", "PDF file saved!")
 
     def save_txt(self):
         p = filedialog.asksaveasfilename(defaultextension=".txt")
         if p: 
             with open(p, "w", encoding="utf-8") as f:
                 f.write(self.full_text)
-            messagebox.showinfo("", "TXT сохранен!")
+            messagebox.showinfo("Success", "Text file saved!")
 
 ctk.set_appearance_mode("dark")
 
