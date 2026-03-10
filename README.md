@@ -24,7 +24,7 @@ The tool provides a graphical interface to transcribe audio/video files locally.
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/YOUR_USERNAME/AudioToText-Whisper.git](https://github.com/YOUR_USERNAME/AudioToText-Whisper.git)
+   git clone [https://github.com/prestoles/AudioToText-Whisper.git](https://github.com/prestoles/AudioToText-Whisper.git)
 2. **Install requirements:**
     ```bash
     pip install -r requirements.txt
