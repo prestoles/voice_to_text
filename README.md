@@ -1,5 +1,7 @@
 # AudioToText (Whisper-based)
 
+![App Preview](assets/preview.png)
+
 Desktop application for automated audio-to-text transcription using the `faster-whisper` engine.
 
 ## Overview
