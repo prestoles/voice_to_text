@@ -12,6 +12,11 @@ import shutil
 import time
 from platformdirs import user_data_dir
 
+try:
+    import imageio_ffmpeg
+except Exception:  # optional dependency fallback
+    imageio_ffmpeg = None
+
 class ToolTip:
     """Hover tooltip for UI elements."""
     def __init__(self, widget, text):
@@ -152,9 +157,10 @@ class AudioToText(ctk.CTk):
             if self._needs_ffmpeg(file_path) and not self._has_ffmpeg():
                 messagebox.showerror(
                     "ffmpeg не найден",
-                    "Для выбранного формата нужен ffmpeg, но он не найден в PATH.\n\n"
+                    "Для выбранного формата нужен ffmpeg, но он не найден.\n\n"
                     "Что можно сделать:\n"
                     "- Установить ffmpeg и добавить его в PATH\n"
+                    "- Или установить зависимость imageio-ffmpeg (ffmpeg будет подтянут автоматически)\n"
                     "- Или конвертировать файл в WAV/FLAC и попробовать снова."
                 )
                 return
@@ -181,6 +187,10 @@ class AudioToText(ctk.CTk):
 
     def run_process(self, path):
         try:
+            ffmpeg_path = self._get_ffmpeg_path()
+            if ffmpeg_path:
+                self._ensure_ffmpeg_in_path(ffmpeg_path)
+
             user_prompt = self.context_entry.get().strip()
             self._emit_ui("status", ("Загрузка модели...", "#f6ff00"))
 
@@ -304,7 +314,29 @@ class AudioToText(ctk.CTk):
                 self.progress_label.configure(text="...")
 
     def _has_ffmpeg(self) -> bool:
-        return shutil.which("ffmpeg") is not None
+        return self._get_ffmpeg_path() is not None
+
+    def _get_ffmpeg_path(self) -> str | None:
+        direct = shutil.which("ffmpeg")
+        if direct:
+            return direct
+        if imageio_ffmpeg is None:
+            return None
+        try:
+            p = imageio_ffmpeg.get_ffmpeg_exe()
+            return p if p and os.path.exists(p) else None
+        except Exception:
+            return None
+
+    def _ensure_ffmpeg_in_path(self, ffmpeg_path: str):
+        try:
+            d = os.path.dirname(ffmpeg_path)
+            current = os.environ.get("PATH", "")
+            parts = current.split(os.pathsep) if current else []
+            if d and d not in parts:
+                os.environ["PATH"] = d + os.pathsep + current
+        except Exception:
+            pass
 
     def _needs_ffmpeg(self, file_path: str) -> bool:
         # WAV/FLAC are typically decodable without external ffmpeg; most other containers/codecs rely on it.
