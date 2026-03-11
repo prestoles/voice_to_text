@@ -417,18 +417,61 @@ class AudioToText(ctk.CTk):
     def save_pdf(self):
         p = filedialog.asksaveasfilename(defaultextension=".pdf")
         if p:
-            pdf = FPDF()
-            pdf.add_page()
-            # Attempt to use system font for Unicode support
-            f_path = "C:/Windows/Fonts/arial.ttf"
-            if os.path.exists(f_path):
-                pdf.add_font("Arial", "", f_path)
-                pdf.set_font("Arial", size=14)
-            else:
-                pdf.set_font("Helvetica", size=14)
-            pdf.multi_cell(0, 10, self.full_text)
-            pdf.output(p)
-            messagebox.showinfo("Success", "PDF file saved!")
+            try:
+                pdf = FPDF()
+                pdf.set_auto_page_break(auto=True, margin=15)
+                pdf.add_page()
+
+                family, font_path = self._pick_unicode_ttf_font()
+                if family and font_path:
+                    # fpdf2: unicode requires a TTF registered with uni=True
+                    pdf.add_font(family, "", font_path, uni=True)
+                    pdf.set_font(family, size=14)
+                else:
+                    pdf.set_font("Helvetica", size=14)
+
+                pdf.multi_cell(0, 10, self.full_text)
+                pdf.output(p)
+                messagebox.showinfo("Success", "PDF file saved!")
+            except Exception as e:
+                messagebox.showerror(
+                    "PDF export error",
+                    "Не удалось сохранить PDF. Частая причина — отсутствие Unicode-шрифта.\n\n"
+                    f"Техническая ошибка: {e}",
+                )
+
+    def _pick_unicode_ttf_font(self) -> tuple[str | None, str | None]:
+        candidates: list[tuple[str, str]] = []
+
+        # Windows common fonts (Cyrillic-friendly)
+        win_fonts = os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts")
+        candidates.extend(
+            [
+                ("SegoeUI", os.path.join(win_fonts, "segoeui.ttf")),
+                ("Arial", os.path.join(win_fonts, "arial.ttf")),
+                ("Tahoma", os.path.join(win_fonts, "tahoma.ttf")),
+            ]
+        )
+
+        # Linux common path
+        candidates.append(("DejaVuSans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))
+
+        # macOS common paths (best-effort)
+        candidates.extend(
+            [
+                ("ArialUnicode", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+                ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
+            ]
+        )
+
+        for family, path in candidates:
+            try:
+                if path and os.path.exists(path):
+                    return family, path
+            except Exception:
+                continue
+
+        return None, None
 
     def save_txt(self):
         p = filedialog.asksaveasfilename(defaultextension=".txt")
