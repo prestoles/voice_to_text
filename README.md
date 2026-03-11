@@ -19,20 +19,27 @@ The tool provides a graphical interface to transcribe audio/video files locally.
 - faster-whisper
 - customtkinter
 - python-docx, fpdf2
+- platformdirs, imageio-ffmpeg
 
 ## Installation & Setup
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/prestoles/AudioToText-Whisper.git](https://github.com/prestoles/AudioToText-Whisper.git)
+   git clone https://github.com/prestoles/voice_to_text.git
+   cd voice_to_text
+   ```
 2. **Install requirements:**
     ```bash
     pip install -r requirements.txt
+    ```
 3. **Run:**
     ```bash
     python main.py
+    ```
 
-Note: The application will check for the small model in the ./models directory on startup. If not found, it will download it automatically from Hugging Face.
+### Notes
+- **Models**: the app will use a bundled `models/<name>` folder if present (e.g. in a packaged build). Otherwise, models are downloaded and cached in a **user-writable** directory (via `platformdirs`) so it works reliably with PyInstaller.
+- **Media formats**: for `.mp3`, `.mp4`, `.mkv`, `.m4a`, etc. decoding typically requires **ffmpeg**. The app will use `ffmpeg` from your system `PATH` if available, or fall back to the bundled binary provided by `imageio-ffmpeg` (installed from `requirements.txt`).
 
 ## Implementation Details
 - **Threading:** Transcription runs in a background thread to keep the GUI responsive.
