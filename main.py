@@ -8,6 +8,8 @@ import queue
 import os
 import winsound
 import sys 
+import shutil
+import time
 from platformdirs import user_data_dir
 
 class ToolTip:
@@ -45,12 +47,14 @@ class AudioToText(ctk.CTk):
         self.title("AudioToText")
         self.geometry("900x700")
         self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.full_text = ""
         self.stop_flag = False  
         self._ui_queue: "queue.Queue[tuple[str, object]]" = queue.Queue()
         self._worker_thread: threading.Thread | None = None
         self._model: WhisperModel | None = None
+        self._stop_requested_at: float | None = None
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(5, weight=1) 
@@ -132,9 +136,13 @@ class AudioToText(ctk.CTk):
         self.ctx_indicator.configure(text_color=color)
 
     def stop_transcription(self):
+        if self.stop_flag:
+            return
         self.stop_flag = True
-        self.update_status("Остановка...", "#ff9500")
-        self.stop_button.configure(state="disabled")
+        self._stop_requested_at = time.time()
+        self.update_status("Останавливаю... (жду текущий фрагмент)", "#ff9500")
+        self.stop_button.configure(text="Останавливаю...", state="disabled")
+        self.select_button.configure(state="disabled")
 
     def start_transcription(self):
         if self.select_button.cget("state") == "disabled": return
@@ -142,8 +150,9 @@ class AudioToText(ctk.CTk):
         file_path = filedialog.askopenfilename(filetypes=[("Медиа файлы", "*.mp3 *.wav *.m4a *.flac *.mp4 *.mkv *.avi")])
         if file_path:
             self.stop_flag = False
+            self._stop_requested_at = None
             self.select_button.configure(state="disabled")
-            self.stop_button.configure(state="normal")
+            self.stop_button.configure(text="Остановить", state="normal")
             
             # Reset UI before processing
             self.text_area.configure(state="normal")
@@ -256,7 +265,7 @@ class AudioToText(ctk.CTk):
                         if "select" in payload:
                             self.select_button.configure(state=payload["select"])
                         if "stop" in payload:
-                            self.stop_button.configure(state=payload["stop"])
+                            self.stop_button.configure(text="Остановить", state=payload["stop"])
                 elif event == "beep":
                     try:
                         winsound.MessageBeep(payload)
@@ -283,6 +292,35 @@ class AudioToText(ctk.CTk):
             # Fallback: keep determinate visuals without division.
             if enabled:
                 self.progress_label.configure(text="...")
+
+    def _on_close(self):
+        t = self._worker_thread
+        if t is not None and t.is_alive():
+            if not self.stop_flag:
+                self.stop_flag = True
+                self._stop_requested_at = time.time()
+            self.update_status("Завершаю... (жду текущий фрагмент)", "#ff9500")
+            try:
+                self.select_button.configure(state="disabled")
+                self.stop_button.configure(text="Завершаю...", state="disabled")
+            except Exception:
+                pass
+            self.after(100, self._wait_worker_then_close)
+            return
+
+        self.destroy()
+
+    def _wait_worker_then_close(self):
+        t = self._worker_thread
+        if t is None or not t.is_alive():
+            self.destroy()
+            return
+
+        # Give a clear UX if stop takes long.
+        if self._stop_requested_at is not None and (time.time() - self._stop_requested_at) > 3:
+            self.update_status("Завершаю... может занять время", "#ff9500")
+
+        self.after(250, self._wait_worker_then_close)
 
     def _resolve_model_sources(self, model_name: str):
         # 1) Bundled model folder (PyInstaller) / local repo model folder (dev)
