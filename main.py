@@ -149,6 +149,16 @@ class AudioToText(ctk.CTk):
         
         file_path = filedialog.askopenfilename(filetypes=[("Медиа файлы", "*.mp3 *.wav *.m4a *.flac *.mp4 *.mkv *.avi")])
         if file_path:
+            if self._needs_ffmpeg(file_path) and not self._has_ffmpeg():
+                messagebox.showerror(
+                    "ffmpeg не найден",
+                    "Для выбранного формата нужен ffmpeg, но он не найден в PATH.\n\n"
+                    "Что можно сделать:\n"
+                    "- Установить ffmpeg и добавить его в PATH\n"
+                    "- Или конвертировать файл в WAV/FLAC и попробовать снова."
+                )
+                return
+
             self.stop_flag = False
             self._stop_requested_at = None
             self.select_button.configure(state="disabled")
@@ -221,7 +231,7 @@ class AudioToText(ctk.CTk):
         except Exception as e:
             self._emit_ui("progress_indeterminate", False)
             self._emit_ui("status", ("Ошибка!", "red"))
-            self._emit_ui("error", str(e))
+            self._emit_ui("error", self._format_processing_error(e, path))
         finally:
             self._emit_ui("buttons", {"select": "normal", "stop": "disabled"})
 
@@ -292,6 +302,27 @@ class AudioToText(ctk.CTk):
             # Fallback: keep determinate visuals without division.
             if enabled:
                 self.progress_label.configure(text="...")
+
+    def _has_ffmpeg(self) -> bool:
+        return shutil.which("ffmpeg") is not None
+
+    def _needs_ffmpeg(self, file_path: str) -> bool:
+        # WAV/FLAC are typically decodable without external ffmpeg; most other containers/codecs rely on it.
+        ext = os.path.splitext(file_path)[1].lower()
+        return ext not in {".wav", ".flac"}
+
+    def _format_processing_error(self, err: Exception, file_path: str) -> str:
+        msg = str(err) if err is not None else "Unknown error"
+        lower = msg.lower()
+        if self._needs_ffmpeg(file_path) and (("ffmpeg" in lower) or ("av" in lower and "error" in lower) or ("no such file" in lower) or ("not found" in lower)):
+            return (
+                "Ошибка декодирования медиа. Похоже, не найден ffmpeg или он не доступен.\n\n"
+                "Решение:\n"
+                "- Установите ffmpeg и добавьте в PATH\n"
+                "- Или конвертируйте файл в WAV/FLAC\n\n"
+                f"Техническая ошибка: {msg}"
+            )
+        return msg
 
     def _on_close(self):
         t = self._worker_thread
