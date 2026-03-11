@@ -4,9 +4,11 @@ from faster_whisper import WhisperModel
 from docx import Document
 from fpdf import FPDF
 import threading
+import queue
 import os
 import winsound
 import sys 
+from platformdirs import user_data_dir
 
 class ToolTip:
     """Hover tooltip for UI elements."""
@@ -46,11 +48,15 @@ class AudioToText(ctk.CTk):
 
         self.full_text = ""
         self.stop_flag = False  
+        self._ui_queue: "queue.Queue[tuple[str, object]]" = queue.Queue()
+        self._worker_thread: threading.Thread | None = None
+        self._model: WhisperModel | None = None
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(5, weight=1) 
 
         self.setup_ui()
+        self.after(50, self._poll_ui_queue)
 
     def setup_ui(self):
         # Context/Prompt section
@@ -148,78 +154,188 @@ class AudioToText(ctk.CTk):
             self.progress_bar.set(0)
             self.progress_label.configure(text="0%")    
             self.progress_bar.configure(progress_color="gray")
+            self._set_progress_indeterminate(False)
             
             # Use threading to prevent GUI freezing during heavy ML tasks
-            threading.Thread(target=self.run_process, args=(file_path,), daemon=True).start()
+            self._worker_thread = threading.Thread(target=self.run_process, args=(file_path,), daemon=True)
+            self._worker_thread.start()
 
     def run_process(self, path):
         try:
             user_prompt = self.context_entry.get().strip()
-            self.update_status("Загрузка модели...", "#f6ff00")
+            self._emit_ui("status", ("Загрузка модели...", "#f6ff00"))
 
-            # Handle paths for both script and PyInstaller bundle
-            base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-            model_path = os.path.join(base_path, "models", "small")
-            
-            is_local = os.path.exists(model_path)
-            
-            # Auto-download model if local folder is missing
-            model = WhisperModel(
-                model_path if is_local else "small", 
-                device="cpu", 
-                compute_type="int8_float32", 
-                download_root=os.path.join(base_path, "models") if not is_local else None,
-                local_files_only=is_local
-            )
+            model = self._get_or_create_model()
 
-            self.update_status("Распознавание...", "#3b8ed0")
-            self.progress_bar.configure(progress_color="#3b8ed0")
+            self._emit_ui("status", ("Распознавание...", "#3b8ed0"))
+            self._emit_ui("progress_style", {"progress_color": "#3b8ed0"})
 
             # Set beam_size=1 for maximum speed, vad_filter=True to ignore silence
             segments, info = model.transcribe(path, beam_size=1, language="ru", initial_prompt=user_prompt, vad_filter=True)
-            total_duration = info.duration
+            total_duration = getattr(info, "duration", None)
+            has_duration = isinstance(total_duration, (int, float)) and total_duration > 0
+            if not has_duration:
+                self._emit_ui("progress_indeterminate", True)
 
             for segment in segments:
                 if self.stop_flag:
-                    self.update_status("Прервано", "#ff4000")
+                    self._emit_ui("status", ("Прервано", "#ff4000"))
                     break
                 
-                # Real-time UI update
                 chunk = segment.text.strip() + " "
-                self.text_area.configure(state="normal")
-                self.text_area.insert("end", chunk)
-                self.text_area.see("end")
                 self.full_text += chunk
-                self.text_area.configure(state="disabled")
+                self._emit_ui("append_text", chunk)
                 
                 # Update progress bar based on audio timestamps
-                progress = segment.end / total_duration
-                self.progress_bar.set(min(progress, 1.0))
-                self.progress_label.configure(text=f"{int(min(progress, 1.0) * 100)}%")
-                self.update_idletasks()
+                if has_duration:
+                    try:
+                        progress = float(segment.end) / float(total_duration)
+                    except (ZeroDivisionError, TypeError, ValueError):
+                        progress = None
+                    if isinstance(progress, (int, float)):
+                        progress = max(0.0, min(progress, 1.0))
+                        self._emit_ui("progress", progress)
+                        self._emit_ui("progress_label", f"{int(progress * 100)}%")
 
             if not self.stop_flag:
-                self.update_status("Готово!", "#00ff15")
-                self.progress_bar.set(1.0)
-                self.progress_label.configure(text="100%")
-                self.progress_bar.configure(progress_color="#01b010")
-                winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                self._emit_ui("progress_indeterminate", False)
+                self._emit_ui("status", ("Готово!", "#00ff15"))
+                self._emit_ui("progress", 1.0)
+                self._emit_ui("progress_label", "100%")
+                self._emit_ui("progress_style", {"progress_color": "#01b010"})
+                self._emit_ui("beep", winsound.MB_ICONASTERISK)
             
             # Enable export even if transcription was partially completed
             if len(self.full_text) > 0:
-                self.btn_docx.configure(state="normal")
-                self.btn_pdf.configure(state="normal")
-                self.btn_txt.configure(state="normal")
+                self._emit_ui("enable_exports", True)
 
         except Exception as e:
-            self.update_status("Ошибка!", "red")
-            messagebox.showerror("Processing Error", str(e))
+            self._emit_ui("progress_indeterminate", False)
+            self._emit_ui("status", ("Ошибка!", "red"))
+            self._emit_ui("error", str(e))
         finally:
-            self.select_button.configure(state="normal")
-            self.stop_button.configure(state="disabled")
+            self._emit_ui("buttons", {"select": "normal", "stop": "disabled"})
 
     def update_status(self, text, color):
         self.status_label.configure(text=f"Статус: {text}", text_color=color)
+
+    def _emit_ui(self, event: str, payload=None):
+        self._ui_queue.put((event, payload))
+
+    def _poll_ui_queue(self):
+        try:
+            while True:
+                event, payload = self._ui_queue.get_nowait()
+                if event == "status":
+                    text, color = payload
+                    self.update_status(text, color)
+                elif event == "append_text":
+                    self.text_area.configure(state="normal")
+                    self.text_area.insert("end", payload)
+                    self.text_area.see("end")
+                    self.text_area.configure(state="disabled")
+                elif event == "progress":
+                    try:
+                        self.progress_bar.set(payload)
+                    except Exception:
+                        pass
+                elif event == "progress_label":
+                    self.progress_label.configure(text=str(payload))
+                elif event == "progress_style":
+                    if isinstance(payload, dict):
+                        self.progress_bar.configure(**payload)
+                elif event == "progress_indeterminate":
+                    self._set_progress_indeterminate(bool(payload))
+                elif event == "enable_exports":
+                    if payload:
+                        self.btn_docx.configure(state="normal")
+                        self.btn_pdf.configure(state="normal")
+                        self.btn_txt.configure(state="normal")
+                elif event == "buttons":
+                    if isinstance(payload, dict):
+                        if "select" in payload:
+                            self.select_button.configure(state=payload["select"])
+                        if "stop" in payload:
+                            self.stop_button.configure(state=payload["stop"])
+                elif event == "beep":
+                    try:
+                        winsound.MessageBeep(payload)
+                    except Exception:
+                        pass
+                elif event == "error":
+                    messagebox.showerror("Processing Error", str(payload))
+        except queue.Empty:
+            pass
+        finally:
+            self.after(50, self._poll_ui_queue)
+
+    def _set_progress_indeterminate(self, enabled: bool):
+        # customtkinter supports indeterminate mode in recent versions; keep this guarded.
+        try:
+            if enabled:
+                self.progress_label.configure(text="...")
+                self.progress_bar.configure(mode="indeterminate")
+                self.progress_bar.start()
+            else:
+                self.progress_bar.stop()
+                self.progress_bar.configure(mode="determinate")
+        except Exception:
+            # Fallback: keep determinate visuals without division.
+            if enabled:
+                self.progress_label.configure(text="...")
+
+    def _resolve_model_sources(self, model_name: str):
+        # 1) Bundled model folder (PyInstaller) / local repo model folder (dev)
+        base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        bundled_model_dir = os.path.join(base_path, "models", model_name)
+
+        # 2) User-writable persistent cache
+        data_dir = user_data_dir(appname="AudioToText", appauthor=False)
+        cache_models_root = os.path.join(data_dir, "models")
+        cache_model_dir = os.path.join(cache_models_root, model_name)
+        return bundled_model_dir, cache_model_dir, cache_models_root
+
+    def _get_or_create_model(self):
+        if self._model is not None:
+            return self._model
+
+        model_name = "small"
+        bundled_model_dir, cache_model_dir, cache_models_root = self._resolve_model_sources(model_name)
+
+        def _dir_has_files(p: str) -> bool:
+            try:
+                return os.path.isdir(p) and any(os.scandir(p))
+            except Exception:
+                return False
+
+        if _dir_has_files(bundled_model_dir):
+            self._model = WhisperModel(
+                bundled_model_dir,
+                device="cpu",
+                compute_type="int8_float32",
+                local_files_only=True,
+            )
+            return self._model
+
+        # Use persistent cache directory for downloads and subsequent runs.
+        os.makedirs(cache_models_root, exist_ok=True)
+        if _dir_has_files(cache_model_dir):
+            self._model = WhisperModel(
+                cache_model_dir,
+                device="cpu",
+                compute_type="int8_float32",
+                local_files_only=True,
+            )
+            return self._model
+
+        self._model = WhisperModel(
+            model_name,
+            device="cpu",
+            compute_type="int8_float32",
+            download_root=cache_models_root,
+            local_files_only=False,
+        )
+        return self._model
 
     def save_docx(self):
         p = filedialog.asksaveasfilename(defaultextension=".docx")
